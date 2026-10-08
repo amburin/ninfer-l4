@@ -460,20 +460,21 @@ Bf16GdnGatingPlan bf16_gdn_gating_resolve_plan(const Bf16GdnGatingProblem& probl
         throw std::invalid_argument(
             "BF16 GDN gating: exact problem or column count is not admitted");
     }
-    if (is_27(problem)) {
-        for (const RouteSpec& route : k27Routes) {
-            if (route.cols.contains(problem.cols)) {
+    // The table is ordered by ascending column count and descending split, so every route after
+    // the covering one launches a strictly smaller grid and the closing MmaUnsplit route carries no
+    // residency constraint. A device with fewer SMs than the table was tuned for therefore
+    // demotes to the widest split it can actually hold instead of failing the launch.
+    const auto resolve = [&](const auto& routes) {
+        bool covered = false;
+        for (const RouteSpec& route : routes) {
+            covered = covered || route.cols.contains(problem.cols);
+            if (covered && candidate_is_legal(route.schedule, problem)) {
                 return bf16_gdn_gating_resolve_candidate(route.schedule, problem);
             }
         }
-    } else {
-        for (const RouteSpec& route : k35Routes) {
-            if (route.cols.contains(problem.cols)) {
-                return bf16_gdn_gating_resolve_candidate(route.schedule, problem);
-            }
-        }
-    }
-    throw std::logic_error("BF16 GDN gating: admitted problem has no covering route");
+        throw std::logic_error("BF16 GDN gating: admitted problem has no covering route");
+    };
+    return is_27(problem) ? resolve(k27Routes) : resolve(k35Routes);
 }
 
 std::size_t bf16_gdn_gating_capacity_workspace_bytes(std::int32_t heads, std::int32_t input_rows,
