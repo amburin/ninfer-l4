@@ -20,6 +20,7 @@ COPY . .
 
 RUN cmake -S . -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
+-DCMAKE_CUDA_ARCHITECTURES=89 \
         -DNINFER_BUILD_APPS=ON \
         -DBUILD_TESTING=OFF \
         -DNINFER_BUILD_BENCHMARKS=OFF \
