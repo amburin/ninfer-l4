@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstddef>
+#include <stdexcept>
 #include <utility>
 
 namespace ninfer::ops::detail {
@@ -76,13 +77,8 @@ using Launch = void (*)(const Tensor&, const Weight&, Tensor&, cudaStream_t);
 
 template <int ActiveTokens>
 void launch_exact(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
-    static constexpr auto kActivationAccess = ActiveTokens <= 4
-                                                  ? Nvfp4SmallTActivationAccess::SharedPhase
-                                                  : Nvfp4SmallTActivationAccess::TokenPacked;
-    static constexpr int kWarpsPerCta       = ActiveTokens >= 13 ? 16 : (ActiveTokens >= 5 ? 4 : 8);
-    using Schedule = Nvfp4SmallTSchedule<kWarpsPerCta, 1, 2, 16, ActiveTokens, 1, kActivationAccess,
-                                         Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
-                                         Nvfp4SmallTBlockOrder::RowsContiguous, 1>;
+    using Schedule =
+        typename Nvfp4LinearSmallTProductionSchedule<Geometry, ActiveTokens>::Type;
     static_assert((kIntermediate % Schedule::kWarpsPerCta) == 0);
     constexpr int kBlocks = kIntermediate / Schedule::kWarpsPerCta;
     const float inverse   = 1.0F / weight.weight_scale_divisor;
@@ -101,12 +97,16 @@ constexpr auto make_launchers(std::index_sequence<Offsets...>) {
         &launch_exact<kNvfp4FirstSmallT + static_cast<int>(Offsets)>...};
 }
 
-constexpr auto kLaunchers = make_launchers(std::make_index_sequence<16 - kNvfp4FirstSmallT + 1>{});
+constexpr auto kLaunchers = make_launchers(std::make_index_sequence<kNvfp4LastSmallT - kNvfp4FirstSmallT + 1>{});
 
 } // namespace
 
 void nvfp4_linear_swiglu_small_t_launch(const Tensor& x, const Weight& weight, Tensor& out,
                                         cudaStream_t stream) {
+    if (x.ne[1] < kNvfp4FirstSmallT || x.ne[1] > kNvfp4LastSmallT) {
+        throw std::invalid_argument("nvfp4 linear_swiglu small-T: unsupported T");
+    }
+
     const std::size_t index = static_cast<std::size_t>(x.ne[1] - kNvfp4FirstSmallT);
     kLaunchers[index](x, weight, out, stream);
 }
